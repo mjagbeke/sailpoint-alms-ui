@@ -1,4 +1,4 @@
-﻿package com.secureitsource.ui.service;
+package com.secureitsource.ui.service;
 
 import io.isc.constants.JsonPathConstants;
 import io.isc.operations.*;
