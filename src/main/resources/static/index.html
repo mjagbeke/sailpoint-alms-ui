@@ -26,107 +26,91 @@
 </header>
 
 <main>
-    <!-- Left: Form panel -->
     <div class="form-panel">
-        <form id="run-form" novalidate>
+        <div class="tabs" role="tablist">
+            <button type="button" class="tab active" id="tab-sheet" role="tab" onclick="setMode('sheet')">Single sheet</button>
+            <button type="button" class="tab" id="tab-driver" role="tab" onclick="setMode('driver')">Driver</button>
+        </div>
 
-            <!-- Tenant Configuration -->
-            <div class="card" id="card-tenant">
-                <div class="card-header" onclick="toggleCard('card-tenant')">
-                    <span class="card-title">Tenant Configuration</span>
-                    <svg class="card-chevron" viewBox="0 0 16 16" width="16" height="16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
-                </div>
+        <!-- ── Single sheet ── -->
+        <div id="mode-sheet" class="mode">
+            <div class="card">
+                <div class="card-header"><span class="card-title">Tenant</span>
+                    <button type="button" class="link-btn" onclick="loadCredentials()">Refresh</button></div>
                 <div class="card-body">
                     <div class="form-group">
-                        <label for="company">Company <span class="req">*</span></label>
-                        <input type="text" id="company" name="company" placeholder="acme-corp" autocomplete="off" required>
+                        <label for="credentials">Credentials file <span class="req">*</span></label>
+                        <select id="credentials" onchange="updateRunButton()"></select>
                     </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="tenantType">Tenant Type</label>
-                            <input type="text" id="tenantType" name="tenantType" placeholder="regular">
-                        </div>
-                        <div class="form-group">
-                            <label for="apiVersion">API Version</label>
-                            <input type="text" id="apiVersion" name="apiVersion" placeholder="v3">
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="authType">Auth Type</label>
-                        <select id="authType" name="authType">
-                            <option value="pat">PAT (Personal Access Token)</option>
-                            <option value="oauth">OAuth (Client Credentials)</option>
-                            <option value="apikey">API Key</option>
-                        </select>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="clientId">Client ID <span class="req">*</span></label>
-                            <input type="text" id="clientId" name="clientId" placeholder="client_id" autocomplete="off" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="clientSecret">Client Secret <span class="req">*</span></label>
-                            <div class="input-with-action">
-                                <input type="password" id="clientSecret" name="clientSecret" placeholder="••••••••" autocomplete="new-password" required>
-                                <button type="button" class="btn-inline" id="toggle-secret-btn" onclick="toggleSecret()">Show</button>
-                            </div>
-                        </div>
-                    </div>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="save-creds" onchange="onSaveCredsChange()">
-                        <span>Remember non-sensitive fields</span>
-                    </label>
+                    <p class="file-note" id="credentials-note"></p>
                 </div>
             </div>
 
-            <!-- Operation -->
-            <div class="card" id="card-operation">
-                <div class="card-header" onclick="toggleCard('card-operation')">
-                    <span class="card-title">Operation</span>
-                    <svg class="card-chevron" viewBox="0 0 16 16" width="16" height="16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
-                </div>
+            <div class="card">
+                <div class="card-header"><span class="card-title">Operation</span></div>
                 <div class="card-body">
-                    <div class="form-group">
-                        <label for="operation">Operation <span class="req">*</span></label>
-                        <select id="operation" name="operation" required onchange="onOperationChange()"></select>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="operation">Operation <span class="req">*</span></label>
+                            <select id="operation" onchange="onOperationChange()"></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="apiVersion">API version</label>
+                            <select id="apiVersion"></select>
+                        </div>
                     </div>
                     <div id="operation-hint" class="operation-hint hidden">
-                        <div class="hint-title">Required CSV columns</div>
+                        <div class="hint-title">Sheet columns
+                            <a id="template-link" class="hint-link" href="#">Download template</a></div>
                         <div id="hint-columns" class="hint-columns"></div>
                     </div>
                 </div>
             </div>
 
-            <!-- Input Files -->
-            <div class="card" id="card-files">
-                <div class="card-header" onclick="toggleCard('card-files')">
-                    <span class="card-title">Input File(s)</span>
-                    <svg class="card-chevron" viewBox="0 0 16 16" width="16" height="16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
-                </div>
+            <div class="card">
+                <div class="card-header"><span class="card-title">Sheet and data files</span></div>
                 <div class="card-body">
-                    <div id="drop-zone" class="drop-zone">
-                        <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M16 4v16M10 14l6-6 6 6" stroke="#6b7280" stroke-width="2" stroke-linecap="round"/><path d="M6 22v4h20v-4" stroke="#6b7280" stroke-width="2" stroke-linecap="round"/></svg>
-                        <p class="drop-primary">Drop CSV files here</p>
-                        <p class="drop-secondary">or <button type="button" class="link-btn" onclick="document.getElementById('file-input').click()">browse files</button></p>
-                        <input type="file" id="file-input" multiple accept=".csv" class="hidden" onchange="onFileInputChange(event)">
+                    <div id="drop-zone" class="drop-zone" onclick="document.getElementById('file-input').click()">
+                        <p class="drop-primary">Drop the sheet and its data files here</p>
+                        <p class="drop-secondary">or click to browse</p>
+                        <input type="file" id="file-input" multiple class="hidden" onchange="addFiles(event.target.files); event.target.value = ''">
                     </div>
                     <div id="file-list" class="file-list"></div>
-                    <p class="file-note">For import operations, file paths in your CSV should be absolute paths on your local machine.</p>
+                    <p class="file-note">Data files a sheet names (such as an import's File Path) are kept next to it, so name them without a folder.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Driver ── -->
+        <div id="mode-driver" class="mode hidden">
+            <div class="card">
+                <div class="card-header"><span class="card-title">Driver folder</span></div>
+                <div class="card-body">
+                    <button type="button" class="btn-secondary" onclick="document.getElementById('folder-input').click()">Choose folder…</button>
+                    <input type="file" id="folder-input" webkitdirectory multiple class="hidden" onchange="uploadFolder(event.target.files); event.target.value = ''">
+                    <p class="file-note" id="folder-note">The folder with the driver and the sheets it names. Each row's credentials file is looked up by name in the credentials folder.</p>
+                    <div class="form-group hidden" id="driver-group">
+                        <label for="driver">Driver</label>
+                        <select id="driver" onchange="checkDriver()"></select>
+                    </div>
                 </div>
             </div>
 
-            <button type="submit" id="run-btn" class="btn-run">
-                <span id="btn-spinner" class="spinner hidden"></span>
-                <span id="btn-text">Run Operation</span>
-            </button>
+            <div class="card hidden" id="preflight-card">
+                <div class="card-header"><span class="card-title">Rows</span><span id="preflight-summary" class="card-meta"></span></div>
+                <div class="card-body preflight" id="preflight"></div>
+            </div>
+        </div>
 
-        </form>
+        <button type="button" id="run-btn" class="btn-run" onclick="run()">
+            <span id="btn-spinner" class="spinner hidden"></span>
+            <span id="btn-text">Run</span>
+        </button>
     </div>
 
-    <!-- Right: Log panel -->
     <div class="log-panel">
         <div class="log-header">
-            <span class="log-title">Log Output</span>
+            <span class="log-title" id="log-title">Log Output</span>
             <div class="log-actions">
                 <span id="log-count" class="log-count">0 lines</span>
                 <button type="button" class="btn-sm" onclick="copyLogs()">Copy</button>
@@ -134,8 +118,9 @@
             </div>
         </div>
         <div id="log-output" class="log-output">
-            <div class="log-empty">No output yet — run an operation to see logs here.</div>
+            <div class="log-empty">No output yet — run a sheet or a driver to see its log here.</div>
         </div>
+        <div id="outputs" class="outputs hidden"></div>
     </div>
 </main>
 
