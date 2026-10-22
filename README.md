@@ -4,9 +4,9 @@ A local web page for running [sailpoint-alms](https://github.com/mjagbeke/sailpo
 
 ## Running it
 
-1. Install the sailpoint-alms version the `pom.xml` names (6.1.0) into your local Maven repository, from its tag:
+1. Install the sailpoint-alms version the `pom.xml` names (6.1.1) into your local Maven repository, from its tag:
    ```powershell
-   git -C ..\sailpoint-alms checkout v6.1.0
+   git -C ..\sailpoint-alms checkout v6.1.1
    mvn -f ..\sailpoint-alms\pom.xml install -DskipTests
    ```
 2. Start the UI and open http://localhost:8080:
