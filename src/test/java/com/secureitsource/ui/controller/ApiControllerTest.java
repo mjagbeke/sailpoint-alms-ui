@@ -3,14 +3,13 @@ package com.secureitsource.ui.controller;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -21,10 +20,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
-import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.jayway.jsonpath.JsonPath;
 import com.secureitsource.ui.config.LocalOnlyFilter;
@@ -36,17 +35,31 @@ import io.isc.util.TenantInfo;
 class ApiControllerTest {
 
     private static final Path ROOT = createRoot();
+    private static final String DEMO = "repo/src/main/resources/demo/";
 
     @Autowired
     MockMvc mvc;
 
     private final TenantInfo.KeyReader original = TenantInfo.reader;
 
+    // A work folder holding a repository whose driver names its sheets from the repository's root, as the demos do
     private static Path createRoot() {
         try {
             Path root = Files.createTempDirectory("alms-ui-test");
             Files.createDirectories(root.resolve("credentials"));
             Files.writeString(root.resolve("credentials/acme.yaml"), "x");
+            Path demo = Files.createDirectories(root.resolve("work/" + DEMO + "roles"));
+            Files.createDirectories(root.resolve("work/" + DEMO + "fixtures"));
+            Files.writeString(demo.resolve("RoleOps.csv"), "Notes,Execute,Operation Type\n");
+            Files.writeString(root.resolve("work/" + DEMO + "fixtures/people.csv"), "Notes,Execute\n");
+            Files.writeString(demo.resolve("driver.csv"), "Notes,Execute,operation,tenant,pathToInput,apiVersion\n"
+                    + "Setup,X,sources,acme,src/main/resources/demo/fixtures/people.csv,\n"
+                    + "Roles,X,roles,acme,roles/RoleOps.csv,\n"
+                    + "Typo,X,rolez,acme,roles/RoleOps.csv,\n"
+                    + "Version,X,roles,acme,roles/RoleOps.csv,v2025\n"
+                    + "No file,X,roles,nobody,roles/RoleOps.csv,\n"
+                    + "Missing sheet,X,roles,acme,roles/Nope.csv,\n");
+            Files.writeString(demo.resolve("bad-only.csv"), "Notes,Execute,operation,tenant,pathToInput\nTypo,X,rolez,acme,roles/RoleOps.csv\n");
             return root;
         } catch (Exception e) {
             throw new IllegalStateException(e);
@@ -56,7 +69,7 @@ class ApiControllerTest {
     @DynamicPropertySource
     static void folders(DynamicPropertyRegistry registry) {
         registry.add("alms.credentials-dir", () -> ROOT.resolve("credentials").toString());
-        registry.add("alms.workspace-dir", () -> ROOT.resolve("work").toString());
+        registry.add("alms.work-dir", () -> ROOT.resolve("work").toString());
     }
 
     @BeforeEach
@@ -67,6 +80,10 @@ class ApiControllerTest {
     @AfterEach
     void restore() {
         TenantInfo.reader = original;
+    }
+
+    private static MockHttpServletRequestBuilder postJson(String url, String json) {
+        return post(url).header("Host", "localhost").header(LocalOnlyFilter.REQUEST_HEADER, "1").contentType(MediaType.APPLICATION_JSON).content(json);
     }
 
     @Test
@@ -93,82 +110,78 @@ class ApiControllerTest {
 
     @Test
     void postWithoutTheRequestHeader_isRefused() throws Exception {
-        mvc.perform(post("/api/workspaces/x/check").header("Host", "localhost").contentType(MediaType.APPLICATION_JSON).content("{}"))
+        mvc.perform(post("/api/drivers/check").header("Host", "localhost").contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isForbidden());
     }
 
     @Test
-    void credentials_listTheFolder() throws Exception {
-        mvc.perform(get("/api/credentials").header("Host", "127.0.0.1:8080"))
+    void tenants_listTheCredentialsFolder() throws Exception {
+        mvc.perform(get("/api/tenants").header("Host", "127.0.0.1:8080"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.files[0].name").value("acme.yaml"))
-                .andExpect(jsonPath("$.files[0].company").value("acme"));
+                .andExpect(jsonPath("$.tenants[0].name").value("acme"))
+                .andExpect(jsonPath("$.tenants[0].company").value("acme"));
     }
 
     @Test
-    void driverFolder_isCheckedAndRun_badRowsAreSkipped() throws Exception {
-        String driver = "Notes,Execute,operation,credentialsFilePath,pathToInput,apiVersion\n"
-                + "Roles,X,roles,somewhere/acme.yaml,src/main/resources/demo/roles/RoleOps.csv,\n"
-                + "Typo,X,rolez,acme.yaml,roles/RoleOps.csv,\n"
-                + "Version,X,roles,acme.yaml,roles/RoleOps.csv,v2025\n";
-
-        String upload = mvc.perform(multipart("/api/workspaces")
-                        .file(new MockMultipartFile("files", "driver.csv", "text/csv", driver.getBytes(StandardCharsets.UTF_8)))
-                        .file(new MockMultipartFile("files", "RoleOps.csv", "text/csv", "Notes,Execute,Operation Type\n".getBytes(StandardCharsets.UTF_8)))
-                        .param("paths", "demo/driver.csv", "demo/roles/RoleOps.csv")
-                        .header("Host", "localhost").header(LocalOnlyFilter.REQUEST_HEADER, "1"))
+    void files_browseTheWorkFolderOnly() throws Exception {
+        mvc.perform(get("/api/files").param("path", DEMO + "roles").header("Host", "localhost"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.drivers[0]").value("demo/driver.csv"))
-                .andReturn().getResponse().getContentAsString();
-        String id = JsonPath.read(upload, "$.id");
+                .andExpect(jsonPath("$.parent").value("repo/src/main/resources/demo"))
+                .andExpect(jsonPath("$.entries[?(@.name == 'driver.csv')].driver").value(true))
+                .andExpect(jsonPath("$.entries[?(@.name == 'RoleOps.csv')].driver").value(false));
 
-        mvc.perform(post("/api/workspaces/" + id + "/check").header("Host", "localhost").header(LocalOnlyFilter.REQUEST_HEADER, "1")
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"driver\":\"demo/driver.csv\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].runnable").value(true))
-                .andExpect(jsonPath("$[0].tenant").value("acme (demo)"))
-                .andExpect(jsonPath("$[0].sheets[0]").value("demo/roles/RoleOps.csv"))
-                .andExpect(jsonPath("$[1].error").value(containsString("Unknown operation \"rolez\"")))
-                .andExpect(jsonPath("$[2].error").value("roles doesn't support apiVersion \"v2025\". Supported: beta."));
-
-        // Only the bad rows: the run logs why they're skipped without calling a tenant
-        String onlyBadRows = "Notes,Execute,operation,credentialsFilePath,pathToInput\nTypo,X,rolez,acme.yaml,roles/RoleOps.csv\n";
-        String second = mvc.perform(multipart("/api/workspaces")
-                        .file(new MockMultipartFile("files", "driver.csv", "text/csv", onlyBadRows.getBytes(StandardCharsets.UTF_8)))
-                        .file(new MockMultipartFile("files", "RoleOps.csv", "text/csv", "Notes,Execute,Operation Type\n".getBytes(StandardCharsets.UTF_8)))
-                        .param("paths", "driver.csv", "roles/RoleOps.csv").header("Host", "localhost").header(LocalOnlyFilter.REQUEST_HEADER, "1"))
-                .andReturn().getResponse().getContentAsString();
-        String secondId = JsonPath.read(second, "$.id");
-
-        mvc.perform(post("/api/workspaces/" + id + "/check").header("Host", "localhost").header(LocalOnlyFilter.REQUEST_HEADER, "1")
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"driver\":\"demo/driver.csv\"}"))
+        mvc.perform(get("/api/files").param("path", "..").header("Host", "localhost"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value(containsString("no longer available")));
+                .andExpect(jsonPath("$.error").value(containsString("is outside")));
+    }
 
-        mvc.perform(post("/api/workspaces/" + secondId + "/runs/driver").header("Host", "localhost").header(LocalOnlyFilter.REQUEST_HEADER, "1")
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"driver\":\"driver.csv\"}"))
-                .andExpect(status().isOk());
+    @Test
+    void check_findsSheetsFromTheRepositoryRoot_andSaysWhyRowsWontRun() throws Exception {
+        mvc.perform(postJson("/api/drivers/check", "{\"driver\":\"" + DEMO + "roles/driver.csv\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(6)))
+                .andExpect(jsonPath("$[0].runnable").value(true))
+                .andExpect(jsonPath("$[0].sheets[0]").value(DEMO + "fixtures/people.csv"))
+                .andExpect(jsonPath("$[1].tenant").value("acme — acme (demo)"))
+                .andExpect(jsonPath("$[2].error").value(containsString("Unknown operation \"rolez\"")))
+                .andExpect(jsonPath("$[3].error").value("roles doesn't support apiVersion \"v2025\". Supported: beta."))
+                .andExpect(jsonPath("$[4].error").value(containsString("Tenant \"nobody\" has no credentials file")))
+                .andExpect(jsonPath("$[5].error").value("Sheet \"roles/Nope.csv\" not found from the driver's folder or the folders above it."));
+    }
+
+    @Test
+    void check_aSheetThatIsntADriver_isRefused() throws Exception {
+        mvc.perform(postJson("/api/drivers/check", "{\"driver\":\"" + DEMO + "roles/RoleOps.csv\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value(containsString("isn't a driver")));
+    }
+
+    @Test
+    void driverRun_logsSkippedRows_andOnlyItsOutputsCanBeDownloaded() throws Exception {
+        String started = mvc.perform(postJson("/api/runs/driver", "{\"driver\":\"" + DEMO + "roles/bad-only.csv\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String runId = JsonPath.read(started, "$.runId");
 
         String snapshot = waitForRun();
         assertEquals("DONE", JsonPath.read(snapshot, "$.state"));
         assertEquals(1, (int) JsonPath.read(snapshot, "$.errors"));
         String line = JsonPath.read(snapshot, "$.lines[0]");
-        assertEquals(true, line.startsWith("ERROR Driver row 1 (rolez) skipped: Unknown operation"), line);
+        assertTrue(line.startsWith("ERROR Driver row 1 (rolez) skipped: Unknown operation"), line);
+
+        mvc.perform(get("/api/runs/" + runId + "/files").param("path", DEMO + "roles/RoleOps.csv").header("Host", "localhost"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value(containsString("isn't an OUTPUT file of that run")));
     }
 
     @Test
-    void sheetRun_unknownCredentialsFile_isRefusedBeforeRunning() throws Exception {
-        String upload = mvc.perform(multipart("/api/workspaces")
-                        .file(new MockMultipartFile("files", "t.csv", "text/csv", "Notes,Execute\n".getBytes(StandardCharsets.UTF_8)))
-                        .header("Host", "localhost").header(LocalOnlyFilter.REQUEST_HEADER, "1"))
-                .andReturn().getResponse().getContentAsString();
-        String id = JsonPath.read(upload, "$.id");
-
-        mvc.perform(post("/api/workspaces/" + id + "/runs/sheet").header("Host", "localhost").header(LocalOnlyFilter.REQUEST_HEADER, "1")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"operation\":\"transforms\",\"apiVersion\":\"beta\",\"credentials\":\"../acme.yaml\",\"sheet\":\"t.csv\"}"))
+    void sheetRun_unknownTenantOrSheetOutside_isRefusedBeforeRunning() throws Exception {
+        mvc.perform(postJson("/api/runs/sheet", "{\"operation\":\"roles\",\"apiVersion\":\"beta\",\"tenant\":\"../acme\",\"sheet\":\"" + DEMO + "roles/RoleOps.csv\"}"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("\"../acme.yaml\" isn't a credentials file name."));
+                .andExpect(jsonPath("$.error").value(containsString("not a path")));
+
+        mvc.perform(postJson("/api/runs/sheet", "{\"operation\":\"roles\",\"apiVersion\":\"beta\",\"tenant\":\"acme\",\"sheet\":\"../credentials/acme.yaml\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value(containsString("is outside")));
     }
 
     private String waitForRun() throws Exception {

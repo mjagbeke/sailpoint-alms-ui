@@ -2,11 +2,12 @@ package com.secureitsource.ui.controller;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 
 import org.springframework.core.io.InputStreamResource;
@@ -25,12 +26,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.multipart.MultipartFile;
 
-import com.secureitsource.ui.service.CredentialsService;
 import com.secureitsource.ui.service.RunService;
-import com.secureitsource.ui.service.Workspace;
-import com.secureitsource.ui.service.WorkspaceService;
+import com.secureitsource.ui.service.TenantsService;
+import com.secureitsource.ui.service.WorkFolder;
 
 import io.isc.runner.DriverRunner;
 import io.isc.runner.Operation;
@@ -43,26 +42,24 @@ public class ApiController {
 
     public record OperationInfo(String name, String group, String label, List<String> versions, List<String> columns) {}
 
-    public record CredentialsInfo(String folder, List<CredentialsService.Credential> files) {}
-
-    public record WorkspaceInfo(String id, List<String> files, List<String> drivers) {}
+    public record TenantsInfo(String folder, List<TenantsService.Tenant> tenants) {}
 
     public record CheckedRow(long number, String notes, String operation, boolean runnable, String error, String apiVersion, String tenant,
             List<String> sheets) {}
 
-    public record SheetRun(String operation, String apiVersion, String credentials, String sheet) {}
+    public record SheetRun(String operation, String apiVersion, String tenant, String sheet) {}
 
     public record DriverRun(String driver) {}
 
     public record Started(String runId) {}
 
-    private final CredentialsService credentials;
-    private final WorkspaceService workspaces;
+    private final TenantsService tenants;
+    private final WorkFolder work;
     private final RunService runs;
 
-    public ApiController(CredentialsService credentials, WorkspaceService workspaces, RunService runs) {
-        this.credentials = credentials;
-        this.workspaces = workspaces;
+    public ApiController(TenantsService tenants, WorkFolder work, RunService runs) {
+        this.tenants = tenants;
+        this.work = work;
         this.runs = runs;
     }
 
@@ -83,54 +80,58 @@ public class ApiController {
         return download(new InputStreamResource(template), operation.name() + ".csv");
     }
 
-    @GetMapping("/credentials")
-    public CredentialsInfo credentials() throws IOException {
-        return new CredentialsInfo(credentials.folder().toString(), credentials.list());
+    @GetMapping("/tenants")
+    public TenantsInfo tenants() throws IOException {
+        return new TenantsInfo(tenants.folder().folder().toString(), tenants.list());
     }
 
-    @PostMapping(value = "/workspaces", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public WorkspaceInfo upload(@RequestParam("files") List<MultipartFile> files, @RequestParam(value = "paths", required = false) List<String> paths)
-            throws IOException, ServiceErrorException {
-        Workspace workspace = workspaces.create(files, paths);
-        return new WorkspaceInfo(workspace.id(), List.copyOf(workspace.uploaded()), workspace.drivers());
+    @GetMapping("/files")
+    public WorkFolder.Listing files(@RequestParam(defaultValue = "") String path) throws IOException, ServiceErrorException {
+        return work.list(path);
     }
 
-    @PostMapping("/workspaces/{id}/check")
-    public List<CheckedRow> check(@PathVariable String id, @RequestBody DriverRun request) throws IOException, ServiceErrorException {
-        Workspace workspace = workspaces.get(id);
-        String driver = driverIn(workspace, request.driver());
+    @PostMapping("/drivers/check")
+    public List<CheckedRow> check(@RequestBody DriverRun request) throws IOException, ServiceErrorException {
         List<CheckedRow> rows = new ArrayList<>();
 
-        for (DriverRunner.Checked checked : runner(workspace, driver).check(workspace.file(driver).toString())) {
+        for (DriverRunner.Checked checked : runner(driver(request)).check(driver(request).toString())) {
             DriverRunner.Row row = checked.row();
             rows.add(new CheckedRow(checked.number(), checked.notes(), checked.operation(), checked.runnable(), checked.error(),
-                    row == null ? null : row.apiVersion(), row == null ? null : row.tenant().company() + " (" + row.tenant().tenantType() + ")",
-                    row == null ? List.of() : row.sheets().stream().map(sheet -> relative(workspace, sheet)).toList()));
+                    row == null ? null : row.apiVersion(),
+                    row == null ? null : row.tenantName() + " — " + row.tenant().company() + " (" + row.tenant().tenantType() + ")",
+                    row == null ? List.of() : row.sheets().stream().map(sheet -> work.relative(Path.of(sheet))).toList()));
         }
         return rows;
     }
 
-    @PostMapping("/workspaces/{id}/runs/driver")
-    public Started runDriver(@PathVariable String id, @RequestBody DriverRun request) throws ServiceErrorException {
-        Workspace workspace = workspaces.get(id);
-        String driver = driverIn(workspace, request.driver());
-        DriverRunner runner = runner(workspace, driver);
-        String driverPath = workspace.file(driver).toString();
-        return new Started(runs.start("Driver " + driver, workspace, () -> runner.run(driverPath)));
+    @PostMapping("/runs/driver")
+    public Started runDriver(@RequestBody DriverRun request) throws IOException, ServiceErrorException {
+        Path driver = driver(request);
+        DriverRunner runner = runner(driver);
+
+        // The OUTPUT files are written next to the sheets of the rows that will run
+        Set<Path> folders = new LinkedHashSet<>();
+        for (DriverRunner.Checked checked : runner.check(driver.toString())) {
+            if (checked.runnable()) {
+                checked.row().sheets().forEach(sheet -> folders.add(Path.of(sheet).getParent()));
+            }
+        }
+        Map<Path, Long> before = work.snapshot(folders);
+
+        return new Started(runs.start("Driver " + work.relative(driver), () -> runner.run(driver.toString()), () -> work.written(folders, before)));
     }
 
-    @PostMapping("/workspaces/{id}/runs/sheet")
-    public Started runSheet(@PathVariable String id, @RequestBody SheetRun request) throws IOException, ServiceErrorException {
-        Workspace workspace = workspaces.get(id);
-
-        if (request.sheet() == null || !workspace.uploaded().contains(request.sheet())) {
-            throw new ServiceErrorException("Choose the sheet to run from the uploaded files.");
-        }
+    @PostMapping("/runs/sheet")
+    public Started runSheet(@RequestBody SheetRun request) throws IOException, ServiceErrorException {
+        Path sheet = work.csv(request.sheet() == null ? "" : request.sheet());
 
         // Checked now, so a bad choice is reported here rather than in the log
-        DriverRunner.Row row = DriverRunner.row(1, "", request.operation(), null, request.apiVersion(), credentials.resolve(request.credentials()),
-                List.of(workspace.file(request.sheet()).toString()));
-        return new Started(runs.start(row.operation().label() + ": " + request.sheet(), workspace, () -> DriverRunner.run(row)));
+        DriverRunner.Row row = DriverRunner.row(1, "", request.operation(), null, request.apiVersion(), tenants.folder(), request.tenant(),
+                List.of(sheet.toString()));
+        Set<Path> folders = Set.of(sheet.getParent());
+        Map<Path, Long> before = work.snapshot(folders);
+
+        return new Started(runs.start(row.operation().label() + ": " + work.relative(sheet), () -> DriverRunner.run(row), () -> work.written(folders, before)));
     }
 
     @GetMapping("/runs/current")
@@ -138,13 +139,13 @@ public class ApiController {
         return runs.current(from).map(ResponseEntity::ok).orElse(ResponseEntity.noContent().build());
     }
 
-    @GetMapping("/workspaces/{id}/files")
-    public ResponseEntity<Resource> file(@PathVariable String id, @RequestParam String path) throws ServiceErrorException {
-        Path file = workspaces.get(id).file(path);
-
-        if (!Files.isRegularFile(file)) {
-            throw new ServiceErrorException("\"" + path + "\" isn't in the upload.");
+    // Only the files the run wrote can be downloaded
+    @GetMapping("/runs/{id}/files")
+    public ResponseEntity<Resource> output(@PathVariable String id, @RequestParam String path) throws ServiceErrorException {
+        if (!runs.wrote(id, path)) {
+            throw new ServiceErrorException("\"" + path + "\" isn't an OUTPUT file of that run.");
         }
+        Path file = work.csv(path);
         return download(new PathResource(file), file.getFileName().toString());
     }
 
@@ -158,24 +159,17 @@ public class ApiController {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
     }
 
-    // Sheets are found in the upload; credentials files by name in the credentials folder
-    private DriverRunner runner(Workspace workspace, String driver) {
-        return new DriverRunner(path -> workspace.resolveSheet(driver, path), credentials::resolveByFileName);
-    }
+    private Path driver(DriverRun request) throws ServiceErrorException {
+        Path driver = work.csv(request.driver() == null ? "" : request.driver());
 
-    private static String driverIn(Workspace workspace, String driver) throws ServiceErrorException {
-        try {
-            if (driver != null && workspace.drivers().contains(driver)) {
-                return driver;
-            }
-        } catch (IOException e) {
-            throw new ServiceErrorException("Couldn't read the uploaded files: " + e.getMessage());
+        if (!WorkFolder.isDriver(driver)) {
+            throw new ServiceErrorException("\"" + request.driver() + "\" isn't a driver: it needs operation and pathToInput columns.");
         }
-        throw new ServiceErrorException("Choose a driver from the uploaded files.");
+        return driver;
     }
 
-    private static String relative(Workspace workspace, String path) {
-        return workspace.root().relativize(Path.of(path)).toString().replace('\\', '/');
+    private DriverRunner runner(Path driver) {
+        return new DriverRunner(work.sheetsFor(driver), tenants.folder());
     }
 
     private static ResponseEntity<Resource> download(Resource body, String fileName) {

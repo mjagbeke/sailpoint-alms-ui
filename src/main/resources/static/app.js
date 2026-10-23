@@ -4,10 +4,8 @@
 
 let mode = 'sheet';
 let operations = [];
-let sheetFiles = [];          // File objects for single-sheet mode
-let sheetChoice = null;       // name of the file that is the sheet
-let driverWorkspace = null;   // { id, files, drivers } after a folder upload
-let driverRunnable = false;
+const picked = { sheet: null, driver: null };   // paths relative to the work folder
+let driverRows = { ok: 0, total: 0 };
 let polling = false;
 let logLineCount = 0;
 
@@ -28,14 +26,17 @@ async function api(path, options = {}) {
   return body;
 }
 
+// localStorage can be unavailable (private windows, blocked storage); the page works without it
+function remember(key, value) { try { localStorage.setItem('alms.' + key, value); } catch (e) {} }
+function recall(key) { try { return localStorage.getItem('alms.' + key); } catch (e) { return null; } }
+
 // ── Start-up ──────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', async () => {
-  setupDropZone();
   try {
     operations = await api('/api/operations');
     fillOperations();
-    await loadCredentials();
+    await loadTenants();
   } catch (err) {
     appendLog('ERROR Couldn\'t load the UI: ' + err.message);
   }
@@ -45,6 +46,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     showRun(current);
     if (current.state === 'RUNNING') poll(current.lines.length);
   }
+  updateRunButton();
 });
 
 function setMode(next) {
@@ -56,26 +58,26 @@ function setMode(next) {
   updateRunButton();
 }
 
-// ── Credentials ───────────────────────────────────────────────────────────────
+// ── Tenants ───────────────────────────────────────────────────────────────────
 
-async function loadCredentials() {
-  const info = await api('/api/credentials');
-  const select = document.getElementById('credentials');
-  const previous = select.value;
+async function loadTenants() {
+  const info = await api('/api/tenants');
+  const select = document.getElementById('tenant');
+  const previous = select.value || recall('tenant');
   select.innerHTML = '';
 
-  info.files.forEach(file => {
+  info.tenants.forEach(t => {
     const option = document.createElement('option');
-    option.value = file.name;
-    option.textContent = file.error ? file.name + ' — ' + file.error : file.name + ' — ' + file.company + ' (' + file.tenantType + ')';
-    option.disabled = !!file.error;
+    option.value = t.name;
+    option.textContent = t.error ? t.name + ' — ' + t.error : t.name + ' — ' + t.company + ' (' + t.tenantType + ')';
+    option.disabled = !!t.error;
     select.appendChild(option);
   });
-  if (previous && info.files.some(f => f.name === previous && !f.error)) select.value = previous;
+  if (previous && info.tenants.some(t => t.name === previous && !t.error)) select.value = previous;
 
-  document.getElementById('credentials-note').textContent = info.files.length
+  document.getElementById('tenant-note').textContent = info.tenants.length
     ? 'From ' + info.folder
-    : 'No credentials files in ' + info.folder + '. Create one with: mainClass --set-credential ' + info.folder + '/<tenant>.yaml';
+    : 'No credentials files in ' + info.folder + '. Create one with: --set-credential <tenant>';
   updateRunButton();
 }
 
@@ -97,6 +99,7 @@ function fillOperations() {
     option.textContent = op.label;
     groups[op.group].appendChild(option);
   });
+  if (recall('operation') && operations.some(op => op.name === recall('operation'))) select.value = recall('operation');
   onOperationChange();
 }
 
@@ -107,6 +110,7 @@ function currentOperation() {
 function onOperationChange() {
   const op = currentOperation();
   if (!op) return;
+  remember('operation', op.name);
 
   const versions = document.getElementById('apiVersion');
   versions.innerHTML = '';
@@ -119,112 +123,85 @@ function onOperationChange() {
   document.getElementById('hint-columns').innerHTML = op.columns.map(c => '<span class="hint-col">' + escHtml(c) + '</span>').join('');
   document.getElementById('template-link').href = '/api/operations/' + encodeURIComponent(op.name) + '/template';
   document.getElementById('operation-hint').classList.remove('hidden');
-}
-
-// ── Single sheet: files ───────────────────────────────────────────────────────
-
-function setupDropZone() {
-  const zone = document.getElementById('drop-zone');
-  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
-  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
-  zone.addEventListener('drop', e => {
-    e.preventDefault();
-    zone.classList.remove('drag-over');
-    addFiles(e.dataTransfer.files);
-  });
-}
-
-function addFiles(list) {
-  Array.from(list).forEach(file => {
-    sheetFiles = sheetFiles.filter(f => f.name !== file.name);
-    sheetFiles.push(file);
-  });
-  if (!sheetChoice || !sheetFiles.some(f => f.name === sheetChoice)) {
-    const firstCsv = sheetFiles.find(f => f.name.toLowerCase().endsWith('.csv'));
-    sheetChoice = firstCsv ? firstCsv.name : null;
-  }
-  renderFiles();
-}
-
-function removeFile(name) {
-  sheetFiles = sheetFiles.filter(f => f.name !== name);
-  if (sheetChoice === name) {
-    const firstCsv = sheetFiles.find(f => f.name.toLowerCase().endsWith('.csv'));
-    sheetChoice = firstCsv ? firstCsv.name : null;
-  }
-  renderFiles();
-}
-
-function renderFiles() {
-  const list = document.getElementById('file-list');
-  list.innerHTML = '';
-
-  sheetFiles.forEach(file => {
-    const chip = document.createElement('label');
-    chip.className = 'file-chip';
-    const isCsv = file.name.toLowerCase().endsWith('.csv');
-    chip.innerHTML =
-      '<input type="radio" name="sheet" ' + (file.name === sheetChoice ? 'checked ' : '') + (isCsv ? '' : 'disabled ') + '>' +
-      '<span class="file-name">' + escHtml(file.name) + '</span>' +
-      '<span class="file-role">' + (file.name === sheetChoice ? 'sheet' : 'data file') + '</span>' +
-      '<button type="button" class="file-remove" title="Remove">×</button>';
-    chip.querySelector('input').addEventListener('change', () => { sheetChoice = file.name; renderFiles(); });
-    chip.querySelector('button').addEventListener('click', e => { e.preventDefault(); removeFile(file.name); });
-    list.appendChild(chip);
-  });
   updateRunButton();
 }
 
-// ── Driver: folder, preflight ─────────────────────────────────────────────────
+// ── File browser ──────────────────────────────────────────────────────────────
 
-async function uploadFolder(list) {
-  const files = Array.from(list);
-  if (!files.length) return;
-
-  driverWorkspace = null;
-  driverRunnable = false;
-  document.getElementById('preflight-card').classList.add('hidden');
-  document.getElementById('folder-note').textContent = 'Uploading ' + files.length + ' files…';
+// Lists the work folder's folders and CSV files. In driver mode only drivers can be chosen.
+async function openBrowser(kind, path) {
+  const box = document.getElementById('browser-' + kind);
+  const start = path !== undefined ? path : (recall('folder.' + kind) || '');
+  let listing;
 
   try {
-    const form = new FormData();
-    files.forEach(file => {
-      form.append('files', file);
-      form.append('paths', file.webkitRelativePath || file.name);
-    });
-    driverWorkspace = await api('/api/workspaces', { method: 'POST', body: form });
+    listing = await api('/api/files?path=' + encodeURIComponent(start));
   } catch (err) {
-    document.getElementById('folder-note').textContent = err.message;
-    updateRunButton();
+    if (path === undefined && start) return openBrowser(kind, '');   // the remembered folder has gone
+    box.innerHTML = '<div class="browser-error">' + escHtml(err.message) + '</div>';
+    box.classList.remove('hidden');
     return;
   }
+  remember('folder.' + kind, listing.path);
 
-  const drivers = driverWorkspace.drivers;
-  document.getElementById('folder-note').textContent = files.length + ' files uploaded. ' +
-    (drivers.length ? '' : 'None of them is a driver (a CSV with operation and pathToInput columns).');
-
-  const select = document.getElementById('driver');
-  select.innerHTML = '';
-  drivers.forEach(d => {
-    const option = document.createElement('option');
-    option.value = option.textContent = d;
-    select.appendChild(option);
+  const crumbs = ['<button type="button" class="crumb" data-path="">' + escHtml(baseName(listing.root)) + '</button>'];
+  let acc = '';
+  listing.path.split('/').filter(Boolean).forEach(part => {
+    acc = acc ? acc + '/' + part : part;
+    crumbs.push('<button type="button" class="crumb" data-path="' + escHtml(acc) + '">' + escHtml(part) + '</button>');
   });
-  document.getElementById('driver-group').classList.toggle('hidden', drivers.length === 0);
-  if (drivers.length) await checkDriver();
+
+  const items = [];
+  if (listing.parent !== null) items.push('<li class="entry folder" data-folder="' + escHtml(listing.parent) + '">..</li>');
+  listing.entries.forEach(e => {
+    if (e.folder) {
+      items.push('<li class="entry folder" data-folder="' + escHtml(e.path) + '">' + escHtml(e.name) + '</li>');
+    } else {
+      const choosable = kind === 'sheet' || e.driver;
+      items.push('<li class="entry file' + (choosable ? '' : ' disabled') + (e.path === picked[kind] ? ' chosen' : '') +
+        '" data-file="' + escHtml(e.path) + '">' + escHtml(e.name) + (e.driver ? '<span class="tag">driver</span>' : '') + '</li>');
+    }
+  });
+  if (!listing.entries.length) items.push('<li class="entry empty">No folders or CSV files here.</li>');
+
+  box.innerHTML =
+    '<div class="crumbs">' + crumbs.join('<span class="crumb-sep">/</span>') +
+    '<button type="button" class="link-btn browser-close">Close</button></div>' +
+    '<ul class="entries">' + items.join('') + '</ul>';
+  box.classList.remove('hidden');
+
+  box.querySelectorAll('.crumb').forEach(b => b.addEventListener('click', () => openBrowser(kind, b.dataset.path)));
+  box.querySelectorAll('[data-folder]').forEach(li => li.addEventListener('click', () => openBrowser(kind, li.dataset.folder)));
+  box.querySelectorAll('.entry.file:not(.disabled)').forEach(li => li.addEventListener('click', () => choose(kind, li.dataset.file)));
+  box.querySelector('.browser-close').addEventListener('click', () => box.classList.add('hidden'));
+}
+
+function choose(kind, path) {
+  picked[kind] = path;
+  document.getElementById(kind + '-picked').textContent = path;
+  document.getElementById(kind + '-picked').classList.add('set');
+  document.getElementById('browser-' + kind).classList.add('hidden');
+  if (kind === 'driver') checkDriver();
   updateRunButton();
 }
 
+function baseName(path) {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : path;
+}
+
+// ── Driver: row check ─────────────────────────────────────────────────────────
+
 async function checkDriver() {
-  const driver = document.getElementById('driver').value;
+  if (!picked.driver) return;
   const card = document.getElementById('preflight-card');
   const body = document.getElementById('preflight');
-  driverRunnable = false;
+  driverRows = { ok: 0, total: 0 };
 
   try {
-    const rows = await api('/api/workspaces/' + driverWorkspace.id + '/check', { method: 'POST', json: { driver } });
+    const rows = await api('/api/drivers/check', { method: 'POST', json: { driver: picked.driver } });
     const ok = rows.filter(r => r.runnable).length;
-    driverRunnable = ok > 0;
+    driverRows = { ok, total: rows.length };
     document.getElementById('preflight-summary').textContent = ok + ' of ' + rows.length + ' will run';
 
     body.innerHTML = rows.length ? '' : '<p class="file-note">No row has both Execute and pathToInput filled.</p>';
@@ -254,28 +231,37 @@ async function checkDriver() {
 function updateRunButton() {
   const btn = document.getElementById('run-btn');
   const ready = mode === 'sheet'
-    ? !!(sheetChoice && document.getElementById('credentials').value && currentOperation())
-    : !!(driverWorkspace && driverRunnable);
+    ? !!(picked.sheet && document.getElementById('tenant').value && currentOperation())
+    : driverRows.ok > 0;
   btn.disabled = polling || !ready;
-  document.getElementById('btn-text').textContent = polling ? 'Running…' : (mode === 'sheet' ? 'Run sheet' : 'Run driver');
+
+  const partial = mode === 'driver' && driverRows.ok < driverRows.total;
+  document.getElementById('btn-text').textContent = polling ? 'Running…'
+    : mode === 'sheet' ? 'Run sheet'
+    : partial ? 'Run ' + driverRows.ok + ' of ' + driverRows.total + ' rows' : 'Run driver';
 }
 
 async function run() {
+  // Skipped rows are often a driver's setup or teardown, so running the rest can fail or leave objects behind
+  if (mode === 'driver' && driverRows.ok < driverRows.total &&
+      !confirm((driverRows.total - driverRows.ok) + ' of ' + driverRows.total + ' rows will be skipped. ' +
+               'If they are setup or teardown rows, the others may fail or leave objects in the tenant. Run the other ' +
+               driverRows.ok + ' rows anyway?')) {
+    return;
+  }
+
   clearLogs();
   try {
     if (mode === 'sheet') {
-      const form = new FormData();
-      sheetFiles.forEach(file => { form.append('files', file); form.append('paths', file.name); });
-      const workspace = await api('/api/workspaces', { method: 'POST', body: form });
-      await api('/api/workspaces/' + workspace.id + '/runs/sheet', { method: 'POST', json: {
+      remember('tenant', document.getElementById('tenant').value);
+      await api('/api/runs/sheet', { method: 'POST', json: {
         operation: document.getElementById('operation').value,
         apiVersion: document.getElementById('apiVersion').value,
-        credentials: document.getElementById('credentials').value,
-        sheet: sheetChoice
+        tenant: document.getElementById('tenant').value,
+        sheet: picked.sheet
       }});
     } else {
-      await api('/api/workspaces/' + driverWorkspace.id + '/runs/driver', { method: 'POST',
-        json: { driver: document.getElementById('driver').value } });
+      await api('/api/runs/driver', { method: 'POST', json: { driver: picked.driver } });
     }
   } catch (err) {
     appendLog('ERROR ' + err.message);
@@ -335,9 +321,10 @@ function finish(snapshot) {
     outputs.innerHTML = '<span class="outputs-title">Output files</span>';
     snapshot.outputs.forEach(path => {
       const link = document.createElement('a');
-      link.href = '/api/workspaces/' + snapshot.workspaceId + '/files?path=' + encodeURIComponent(path);
+      link.href = '/api/runs/' + snapshot.id + '/files?path=' + encodeURIComponent(path);
       link.className = 'output-link';
-      link.textContent = path;
+      link.title = path;
+      link.textContent = baseName(path);
       outputs.appendChild(link);
     });
   }

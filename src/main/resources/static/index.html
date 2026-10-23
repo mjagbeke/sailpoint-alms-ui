@@ -36,13 +36,13 @@
         <div id="mode-sheet" class="mode">
             <div class="card">
                 <div class="card-header"><span class="card-title">Tenant</span>
-                    <button type="button" class="link-btn" onclick="loadCredentials()">Refresh</button></div>
+                    <button type="button" class="link-btn" onclick="loadTenants()">Refresh</button></div>
                 <div class="card-body">
                     <div class="form-group">
-                        <label for="credentials">Credentials file <span class="req">*</span></label>
-                        <select id="credentials" onchange="updateRunButton()"></select>
+                        <label for="tenant">Tenant <span class="req">*</span></label>
+                        <select id="tenant" onchange="updateRunButton()"></select>
                     </div>
-                    <p class="file-note" id="credentials-note"></p>
+                    <p class="file-note" id="tenant-note"></p>
                 </div>
             </div>
 
@@ -68,15 +68,12 @@
             </div>
 
             <div class="card">
-                <div class="card-header"><span class="card-title">Sheet and data files</span></div>
+                <div class="card-header"><span class="card-title">Sheet</span></div>
                 <div class="card-body">
-                    <div id="drop-zone" class="drop-zone" onclick="document.getElementById('file-input').click()">
-                        <p class="drop-primary">Drop the sheet and its data files here</p>
-                        <p class="drop-secondary">or click to browse</p>
-                        <input type="file" id="file-input" multiple class="hidden" onchange="addFiles(event.target.files); event.target.value = ''">
-                    </div>
-                    <div id="file-list" class="file-list"></div>
-                    <p class="file-note">Data files a sheet names (such as an import's File Path) are kept next to it, so name them without a folder.</p>
+                    <div class="picked" id="sheet-picked">No sheet chosen.</div>
+                    <button type="button" class="btn-secondary" onclick="openBrowser('sheet')">Choose sheet…</button>
+                    <div class="browser hidden" id="browser-sheet"></div>
+                    <p class="file-note">The sheet is run where it is. Data files it names, such as an import's File Path, are found next to it, and OUTPUT files are written there.</p>
                 </div>
             </div>
         </div>
@@ -84,20 +81,19 @@
         <!-- ── Driver ── -->
         <div id="mode-driver" class="mode hidden">
             <div class="card">
-                <div class="card-header"><span class="card-title">Driver folder</span></div>
+                <div class="card-header"><span class="card-title">Driver</span></div>
                 <div class="card-body">
-                    <button type="button" class="btn-secondary" onclick="document.getElementById('folder-input').click()">Choose folder…</button>
-                    <input type="file" id="folder-input" webkitdirectory multiple class="hidden" onchange="uploadFolder(event.target.files); event.target.value = ''">
-                    <p class="file-note" id="folder-note">The folder with the driver and the sheets it names. Each row's credentials file is looked up by name in the credentials folder.</p>
-                    <div class="form-group hidden" id="driver-group">
-                        <label for="driver">Driver</label>
-                        <select id="driver" onchange="checkDriver()"></select>
-                    </div>
+                    <div class="picked" id="driver-picked">No driver chosen.</div>
+                    <button type="button" class="btn-secondary" onclick="openBrowser('driver')">Choose driver…</button>
+                    <div class="browser hidden" id="browser-driver"></div>
+                    <p class="file-note">Each row's sheets are found from the driver's folder or the folders above it, and its tenant in the credentials folder.</p>
                 </div>
             </div>
 
             <div class="card hidden" id="preflight-card">
-                <div class="card-header"><span class="card-title">Rows</span><span id="preflight-summary" class="card-meta"></span></div>
+                <div class="card-header"><span class="card-title">Rows</span>
+                    <span class="card-meta"><span id="preflight-summary"></span>
+                        <button type="button" class="link-btn" onclick="checkDriver()">Check again</button></span></div>
                 <div class="card-body preflight" id="preflight"></div>
             </div>
         </div>

@@ -19,7 +19,7 @@ import jakarta.annotation.PreDestroy;
 
 // Runs one thing at a time in the background and keeps what it logged, so the page can show progress and the result
 // after the request that started it has returned. Only the library's own messages (io.* loggers, INFO and above) from
-// the run's thread are kept.
+// the run's thread are kept. When the run ends, its OUTPUT files are listed.
 @Service
 public class RunService {
 
@@ -29,21 +29,25 @@ public class RunService {
         void run() throws Exception;
     }
 
+    // The files a run wrote, found once it has ended
+    public interface Outputs {
+        List<String> find() throws Exception;
+    }
+
     // What the page polls: the lines from index `from` on, and the OUTPUT files once the run has ended
-    public record Snapshot(String id, String label, String workspaceId, State state, int warnings, int errors, int from, List<String> lines,
-            List<String> outputs) {}
+    public record Snapshot(String id, String label, State state, int warnings, int errors, int from, List<String> lines, List<String> outputs) {}
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> new Thread(runnable, "alms-run"));
     private volatile Run current;
 
-    public synchronized String start(String label, Workspace workspace, Body body) {
+    public synchronized String start(String label, Body body, Outputs outputs) {
         if (isRunning()) {
             throw new IllegalStateException("A run is in progress; wait for it to finish.");
         }
 
-        Run run = new Run(UUID.randomUUID().toString(), label, workspace);
+        Run run = new Run(UUID.randomUUID().toString(), label);
         current = run;
-        executor.submit(() -> run.execute(body));
+        executor.submit(() -> run.execute(body, outputs));
         return run.id;
     }
 
@@ -57,6 +61,12 @@ public class RunService {
         return run == null ? Optional.empty() : Optional.of(run.snapshot(from));
     }
 
+    // A file the given run wrote, so only those can be downloaded
+    public boolean wrote(String runId, String path) {
+        Run run = current;
+        return run != null && run.id.equals(runId) && run.state != State.RUNNING && run.outputs.contains(path);
+    }
+
     @PreDestroy
     void stop() {
         executor.shutdownNow();
@@ -65,20 +75,18 @@ public class RunService {
     private static final class Run {
         private final String id;
         private final String label;
-        private final Workspace workspace;
         private final List<String> lines = new ArrayList<>();
         private volatile State state = State.RUNNING;
         private volatile List<String> outputs = List.of();
         private int warnings;
         private int errors;
 
-        Run(String id, String label, Workspace workspace) {
+        Run(String id, String label) {
             this.id = id;
             this.label = label;
-            this.workspace = workspace;
         }
 
-        void execute(Body body) {
+        void execute(Body body, Outputs found) {
             Logger root = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
             String thread = Thread.currentThread().getName();
             AppenderBase<ILoggingEvent> appender = new AppenderBase<>() {
@@ -103,7 +111,7 @@ public class RunService {
                 root.detachAppender(appender);
                 appender.stop();
                 try {
-                    outputs = workspace.outputs();
+                    outputs = List.copyOf(found.find());
                 } catch (Exception e) {
                     add(Level.WARN, "Couldn't list the OUTPUT files: " + e.getMessage());
                 }
@@ -122,7 +130,7 @@ public class RunService {
 
         synchronized Snapshot snapshot(int from) {
             int start = Math.max(0, Math.min(from, lines.size()));
-            return new Snapshot(id, label, workspace.id(), state, warnings, errors, start, List.copyOf(lines.subList(start, lines.size())), outputs);
+            return new Snapshot(id, label, state, warnings, errors, start, List.copyOf(lines.subList(start, lines.size())), outputs);
         }
     }
 }
