@@ -25,7 +25,7 @@
     <div id="status-badge" class="status-badge status-idle">Ready</div>
 </header>
 
-<main>
+<main id="main">
     <div class="form-panel">
         <div class="tabs" role="tablist">
             <button type="button" class="tab active" id="tab-sheet" role="tab" onclick="setMode('sheet')">Single sheet</button>
@@ -106,7 +106,12 @@
 
     <div class="log-panel">
         <div class="log-header">
-            <span class="log-title" id="log-title">Log Output</span>
+            <div class="log-heading">
+                <button type="button" class="btn-icon" id="sidebar-toggle" onclick="toggleSidebar()" title="Hide the settings panel" aria-label="Hide the settings panel" aria-expanded="true">
+                    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/><path id="sidebar-chevron" d="M10.5 6l-2 2 2 2"/></svg>
+                </button>
+                <span class="log-title" id="log-title">Log Output</span>
+            </div>
             <div class="log-actions">
                 <span id="log-count" class="log-count">0 lines</span>
                 <button type="button" class="btn-sm" onclick="copyLogs()">Copy</button>

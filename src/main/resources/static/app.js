@@ -268,6 +268,7 @@ async function run() {
     setBadge('error', 'Not started');
     return;
   }
+  toggleSidebar(true);
   poll(0);
 }
 
@@ -337,6 +338,22 @@ function setBadge(kind, text) {
   badge.textContent = text;
 }
 
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+
+// Collapsing the settings panel gives the log the full width; a run collapses it, the button brings it back
+function toggleSidebar(collapse) {
+  const main = document.getElementById('main');
+  const collapsed = collapse !== undefined ? collapse : !main.classList.contains('sidebar-collapsed');
+  main.classList.toggle('sidebar-collapsed', collapsed);
+
+  const btn = document.getElementById('sidebar-toggle');
+  const label = collapsed ? 'Show the settings panel' : 'Hide the settings panel';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('aria-expanded', String(!collapsed));
+  document.getElementById('sidebar-chevron').setAttribute('d', collapsed ? 'M8.5 6l2 2-2 2' : 'M10.5 6l-2 2 2 2');
+}
+
 // ── Log ───────────────────────────────────────────────────────────────────────
 
 function appendLog(line) {
@@ -345,9 +362,18 @@ function appendLog(line) {
   if (empty) empty.remove();
 
   const level = line.split(' ', 1)[0].toLowerCase();
+  const message = line.substring(level.length + 1);
   const div = document.createElement('div');
   div.className = 'log-line log-' + (['info', 'warn', 'error'].includes(level) ? level : 'default');
-  div.textContent = line;
+
+  // A driver row's start and finish lines: shown as section headers, without the "=== ... ===" wrapping
+  const section = /^=== (Start|Finished|Stopped) (.*) ===$/.exec(message);
+  if (section) {
+    div.className = 'log-line log-section log-section-' + section[1].toLowerCase();
+    div.textContent = section[1] + ' ' + section[2];
+  } else {
+    div.textContent = line;
+  }
   output.appendChild(div);
 
   logLineCount++;
